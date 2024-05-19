@@ -9,7 +9,7 @@
 
 namespace rezvangrad {
 
-class Value {
+class Value : public std::enable_shared_from_this<Value> {
 public:
   double data;
   double grad;
