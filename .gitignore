@@ -2,6 +2,8 @@
 *.d
 
 # Object files
+*.slo
+*.lo
 *.o
 *.ko
 *.obj
@@ -15,6 +17,21 @@
 # Precompiled Headers
 *.gch
 *.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
 
 # Libraries
 *.lib
@@ -50,3 +67,10 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
