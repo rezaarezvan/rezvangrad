@@ -74,3 +74,5 @@ dkms.conf
 *.ptx
 *.cubin
 *.fatbin
+
+/build
