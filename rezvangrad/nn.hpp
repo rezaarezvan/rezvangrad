@@ -1,10 +1,9 @@
-// File: rezvangrad/nn.hpp
-
 #ifndef REZVANGRAD_NN_HPP
 #define REZVANGRAD_NN_HPP
 
 #include "engine.hpp"
-#include <memory>
+
+#include <iostream>
 #include <random>
 #include <vector>
 
@@ -12,112 +11,150 @@ namespace rezvangrad {
 
 class Module {
 public:
-  virtual ~Module() = default;
-  virtual void zero_grad() {
-    for (auto &p : parameters()) {
-      p->set_grad(0);
+  void zero_grad() {
+    for (auto &weight : parameters()) {
+      weight->set_grad(0.0);
     }
   }
-  virtual std::vector<Value *> parameters() = 0;
+  virtual std::vector<std::shared_ptr<Value>> parameters() = 0;
 };
 
 class Neuron : public Module {
+private:
+  std::vector<std::shared_ptr<Value>> _weights;
+  std::shared_ptr<Value> _biase = std::make_shared<Value>(0);
+  bool _nonlin;
+
 public:
-  Neuron(size_t nin, bool nonlin = true) : nonlin(nonlin) {
+  Neuron(int nin, bool nonlin = true) : _nonlin(nonlin) {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<> dis(-1, 1);
-    for (size_t i = 0; i < nin; ++i) {
-      w.push_back(std::make_unique<Value>(dis(gen)));
+    std::uniform_real_distribution<> dis(-1.0, 1.0);
+    _weights.reserve(nin);
+    for (int i = 0; i < nin; ++i) {
+      auto weight = std::make_shared<Value>(dis(gen));
+      _weights.emplace_back(weight);
     }
-    b = std::make_unique<Value>(0);
   }
 
-  Value operator()(const std::vector<Value> &x) {
-    Value act(0);
-    for (size_t i = 0; i < x.size(); ++i) {
-      act = act + x[i] * *w[i];
+  std::shared_ptr<Value> operator()(std::vector<std::shared_ptr<Value>> &x) {
+    std::shared_ptr<Value> act = std::make_shared<Value>(0.0);
+    for (int i = 0; i < x.size(); ++i) {
+      act = act + (x[i] * _weights[i]);
     }
-    act = act + *b;
-    return nonlin ? act.relu() : act;
+    act = act + _biase;
+    return _nonlin ? act->relu() : act;
   }
 
-  std::vector<Value *> parameters() override {
-    std::vector<Value *> params;
-    for (auto &param : w) {
-      params.push_back(param.get());
+  std::vector<std::shared_ptr<Value>> parameters() override {
+    std::vector<std::shared_ptr<Value>> parameters;
+    parameters.reserve(_weights.size() + 1);
+    for (auto &weight : _weights) {
+      parameters.emplace_back(weight);
     }
-    params.push_back(b.get());
-    return params;
+    parameters.emplace_back(_biase);
+    return parameters;
   }
 
-private:
-  std::vector<std::unique_ptr<Value>> w;
-  std::unique_ptr<Value> b;
-  bool nonlin;
+  void show_parameters() {
+    std::cout << "weights: ";
+    for (auto &weight : _weights) {
+      std::cout << weight->get_data() << ", ";
+    }
+    std::cout << "bias: " << _biase->get_data() << std::endl;
+  }
 };
 
 class Layer : public Module {
+private:
+  std::vector<Neuron> _neurons;
+  int _total_parameters;
+
 public:
-  Layer(size_t nin, size_t nout, bool nonlin = true) {
-    for (size_t i = 0; i < nout; ++i) {
-      neurons.push_back(std::make_unique<Neuron>(nin, nonlin));
+  Layer(int nin, int nout) : _total_parameters((nin + 1) * nout) {
+    _neurons.reserve(nout);
+    for (int i = 0; i < nout; ++i) {
+      _neurons.emplace_back(Neuron(nin, true));
     }
   }
 
-  std::vector<Value> operator()(const std::vector<Value> &x) {
-    std::vector<Value> out;
-    for (auto &n : neurons) {
-      out.push_back((*n)(x));
+  std::vector<std::shared_ptr<Value>>
+  operator()(std::vector<std::shared_ptr<Value>> x) {
+    std::vector<std::shared_ptr<Value>> out;
+    out.reserve(_neurons.size());
+    for (auto &neuron : _neurons) {
+      out.emplace_back(neuron(x));
     }
     return out;
   }
 
-  std::vector<Value *> parameters() override {
-    std::vector<Value *> params;
-    for (auto &n : neurons) {
-      auto n_params = n->parameters();
-      params.insert(params.end(), n_params.begin(), n_params.end());
+  std::vector<std::shared_ptr<Value>> parameters() override {
+    std::vector<std::shared_ptr<Value>> parameters;
+    parameters.reserve(_total_parameters);
+    for (auto &neuron : _neurons) {
+      for (auto &weight : neuron.parameters()) {
+        parameters.emplace_back(weight);
+      }
     }
-    return params;
+    return parameters;
   }
 
-private:
-  std::vector<std::unique_ptr<Neuron>> neurons;
+  void show_parameters() {
+    std::cout << "Layer Weights: " << _total_parameters << std::endl;
+    for (auto &neuron : _neurons) {
+      neuron.show_parameters();
+    }
+  }
 };
 
 class MLP : public Module {
-public:
-  MLP(size_t nin, const std::vector<size_t> &nouts) {
-    size_t sz = nin;
-    for (size_t i = 0; i < nouts.size(); ++i) {
-      layers.push_back(
-          std::make_unique<Layer>(sz, nouts[i], i != nouts.size() - 1));
-      sz = nouts[i];
-    }
-  }
-
-  std::vector<Value> operator()(const std::vector<Value> &x) {
-    std::vector<Value> out = x;
-    for (auto &layer : layers) {
-      out = (*layer)(out);
-    }
-    return out;
-  }
-
-  std::vector<Value *> parameters() override {
-    std::vector<Value *> params;
-    for (auto &layer : layers) {
-      auto layer_params = layer->parameters();
-      params.insert(params.end(), layer_params.begin(), layer_params.end());
-    }
-    return params;
-  }
-
 private:
-  std::vector<std::unique_ptr<Layer>> layers;
+  std::vector<Layer> _layers;
+  int _total_parameters;
+
+public:
+  MLP(int nin, std::vector<int> nout) : _total_parameters(0) {
+    _layers.reserve(nout.size());
+    for (int i = 0; i < nout.size(); ++i) {
+      if (i == 0) {
+        _layers.emplace_back(Layer(nin, nout[i]));
+        _total_parameters += nin * nout[i];
+      } else {
+        _layers.emplace_back(Layer(nout[i - 1], nout[i]));
+        _total_parameters += nout[i - 1] * nout[i];
+      }
+    }
+  }
+
+  std::vector<std::shared_ptr<Value>>
+  operator()(std::vector<std::shared_ptr<Value>> x) {
+    for (auto &layer : _layers) {
+      x = layer(x);
+    }
+    return x;
+  }
+
+  std::vector<std::shared_ptr<Value>> parameters() override {
+    std::vector<std::shared_ptr<Value>> parameters;
+    parameters.reserve(_total_parameters);
+    for (auto &layer : _layers) {
+      for (auto &param : layer.parameters()) {
+        parameters.emplace_back(param);
+      }
+    }
+    return parameters;
+  }
+
+  void show_parameters() {
+    int i = 0;
+    for (auto &layer : _layers) {
+      std::cout << "\nLayer" << i << ": " << std::endl;
+      layer.show_parameters();
+      i++;
+    }
+  }
 };
 
 } // namespace rezvangrad
 
-#endif // REZVANGRAD_NN_HPP
+#endif

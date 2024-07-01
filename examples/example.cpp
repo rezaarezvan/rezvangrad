@@ -1,37 +1,39 @@
-// File: examples/example.cpp
-
 #include "../rezvangrad/engine.hpp"
+#include "../rezvangrad/nn.hpp"
 #include <iostream>
+#include <vector>
+
+using namespace rezvangrad;
 
 int main() {
-  using namespace rezvangrad;
+  MLP mlp(3, {4, 1});
 
-  // Create some values
-  Value a(2.0);
-  Value b(3.0);
+  auto params = mlp.parameters();
+  std::cout << "Initial parameters:" << std::endl;
+  for (size_t i = 0; i < params.size(); ++i) {
+    std::cout << "Parameter " << i << " address: " << params[i].get()
+              << ", data: " << params[i]->get_data()
+              << ", grad: " << params[i]->get_grad() << std::endl;
+  }
 
-  // Perform operations
-  Value c = a + b;
-  Value d = a * b;
-  Value e = c.relu();
-  Value f = d.pow(2);
+  std::vector<std::shared_ptr<Value>> x = {std::make_shared<Value>(1.0),
+                                           std::make_shared<Value>(2.0),
+                                           std::make_shared<Value>(3.0)};
 
-  // Compute gradients
-  f.backward();
+  auto output = mlp(x);
+  std::cout << "\nOutput: " << output[0]->get_data() << std::endl;
 
-  // Print results
-  std::cout << "a: data = " << a.get_data() << ", grad = " << a.get_grad()
-            << std::endl;
-  std::cout << "b: data = " << b.get_data() << ", grad = " << b.get_grad()
-            << std::endl;
-  std::cout << "c: data = " << c.get_data() << ", grad = " << c.get_grad()
-            << std::endl;
-  std::cout << "d: data = " << d.get_data() << ", grad = " << d.get_grad()
-            << std::endl;
-  std::cout << "e: data = " << e.get_data() << ", grad = " << e.get_grad()
-            << std::endl;
-  std::cout << "f: data = " << f.get_data() << ", grad = " << f.get_grad()
-            << std::endl;
+  auto loss = output[0]->pow(std::make_shared<Value>(2));
+  std::cout << "Loss: " << loss->get_data() << std::endl;
+
+  loss->backward();
+
+  std::cout << "\nParameters and gradients after backward pass:" << std::endl;
+  for (size_t i = 0; i < params.size(); ++i) {
+    std::cout << "Parameter " << i << " address: " << params[i].get()
+              << ", data: " << params[i]->get_data()
+              << ", grad: " << params[i]->get_grad() << std::endl;
+  }
 
   return 0;
 }

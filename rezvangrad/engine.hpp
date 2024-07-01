@@ -10,101 +10,143 @@
 
 namespace rezvangrad {
 
-class Value {
-public:
-  Value(double data, const std::vector<Value *> &children = {},
-        const std::string &op = "");
-  Value(const Value &other) = default;
-  Value(Value &&other) noexcept = default;
-  Value &operator=(const Value &other) = default;
-  Value &operator=(Value &&other) noexcept = default;
-
-  Value operator+(const Value &other) const;
-  Value operator*(const Value &other) const;
-  Value pow(double exponent) const;
-  Value relu() const;
-  void backward();
-
-  double get_data() const { return _data; }
-  double get_grad() const { return _grad; }
-  void set_grad(double grad) { _grad = grad; }
-
+class Value : public std::enable_shared_from_this<Value> {
 private:
-  double _data;
-  mutable double _grad;
+  float _data;
+  float _grad;
   std::function<void()> _backward;
-  std::vector<Value *> _prev;
-  std::string _op;
+  std::unordered_set<std::shared_ptr<Value>> _previous;
+  std::string _operation;
 
-  void build_topo(std::vector<Value *> &topo,
-                  std::unordered_set<Value *> &visited) const;
+public:
+  Value(float data, std::unordered_set<std::shared_ptr<Value>> prev = {},
+        std::string op = "")
+      : _data(data), _grad(0.0), _previous(std::move(prev)),
+        _operation(std::move(op)) {
+    _backward = [this] {
+      for (const auto &child : this->_previous) {
+        child->_backward();
+      }
+    };
+  }
+
+  void set_grad(float grad_value) { this->_grad = grad_value; }
+  float get_data() { return _data; }
+
+  void set_data(float data) { this->_data = data; }
+  float get_grad() const { return _grad; }
+
+  std::unordered_set<std::shared_ptr<Value>> get_prev() const {
+    return _previous;
+  }
+
+  std::shared_ptr<Value> operator+(const std::shared_ptr<Value> &other) {
+    auto out_prev =
+        std::unordered_set<std::shared_ptr<Value>>{shared_from_this(), other};
+    auto out = std::make_shared<Value>(_data + other->_data, out_prev, "+");
+    out->_backward = [this, other, out] {
+      _grad += out->_grad;
+      other->_grad += out->_grad;
+    };
+    return out;
+  }
+
+  std::shared_ptr<Value> operator-(const std::shared_ptr<Value> &other) {
+    return (*this) + (-(*other));
+  }
+
+  std::shared_ptr<Value> operator*(const std::shared_ptr<Value> &other) {
+    auto out_prev =
+        std::unordered_set<std::shared_ptr<Value>>{shared_from_this(), other};
+    auto out = std::make_shared<Value>(_data * other->_data, out_prev, "*");
+    out->_backward = [this, other, out] {
+      _grad += other->_data * out->_grad;
+      other->_grad += _data * out->_grad;
+    };
+    return out;
+  }
+
+  std::shared_ptr<Value> operator-() {
+    return (*this) * std::make_shared<Value>(-1);
+  }
+
+  std::shared_ptr<Value> pow(const std::shared_ptr<Value> &other) {
+    auto out_prev =
+        std::unordered_set<std::shared_ptr<Value>>{shared_from_this(), other};
+    auto out =
+        std::make_shared<Value>(std::pow(_data, other->_data), out_prev, "^");
+    out->_backward = [this, other, out] {
+      _grad += other->_data * std::pow(_data, other->_data - 1) * out->_grad;
+    };
+    return out;
+  }
+
+  std::shared_ptr<Value> operator/(const std::shared_ptr<Value> &other) {
+    return (*this) * other->pow(std::make_shared<Value>(-1));
+  }
+
+  std::shared_ptr<Value> relu() {
+    auto out_prev =
+        std::unordered_set<std::shared_ptr<Value>>{shared_from_this()};
+    auto out = std::make_shared<Value>(std::max(0.0f, _data), out_prev, "relu");
+    out->_backward = [this, out] { _grad += (_data > 0) ? out->_grad : 0; };
+    return out;
+  }
+
+  void backward() {
+    std::vector<std::shared_ptr<Value>> topo;
+    std::unordered_set<std::shared_ptr<Value>> visited;
+
+    std::function<void(const std::shared_ptr<Value> &)> build_topo =
+        [&](const std::shared_ptr<Value> &v) {
+          if (visited.find(v) == visited.end()) {
+            visited.insert(v);
+            for (const auto &child : v->_previous) {
+              build_topo(child);
+            }
+            topo.push_back(v);
+          }
+        };
+
+    build_topo(shared_from_this());
+    _grad = 1.0;
+
+    for (auto it = topo.rbegin(); it != topo.rend(); ++it) {
+      const auto &v = *it;
+      v->_backward();
+    }
+  }
 };
 
-Value::Value(double data, const std::vector<Value *> &children,
-             const std::string &op)
-    : _data(data), _grad(0), _prev(children), _op(op) {
-  _backward = []() {};
+inline std::shared_ptr<Value> operator+(const std::shared_ptr<Value> &lhs,
+                                        const std::shared_ptr<Value> &rhs) {
+  return (*lhs) + rhs;
 }
 
-Value Value::operator+(const Value &other) const {
-  Value out(_data + other._data,
-            {const_cast<Value *>(this), const_cast<Value *>(&other)}, "+");
-  out._backward = [&out, this, &other]() {
-    this->_grad += out._grad;
-    other._grad += out._grad;
-  };
-  return out;
+inline std::shared_ptr<Value> operator-(const std::shared_ptr<Value> &lhs,
+                                        const std::shared_ptr<Value> &rhs) {
+  return (*lhs) - rhs;
 }
 
-Value Value::operator*(const Value &other) const {
-  Value out(_data * other._data,
-            {const_cast<Value *>(this), const_cast<Value *>(&other)}, "*");
-  out._backward = [&out, this, &other]() {
-    this->_grad += other._data * out._grad;
-    other._grad += this->_data * out._grad;
-  };
-  return out;
+inline std::shared_ptr<Value> operator*(const std::shared_ptr<Value> &lhs,
+                                        const std::shared_ptr<Value> &rhs) {
+  return (*lhs) * rhs;
 }
 
-Value Value::pow(double exponent) const {
-  Value out(std::pow(_data, exponent), {const_cast<Value *>(this)},
-            "**" + std::to_string(exponent));
-  out._backward = [&out, this, exponent]() {
-    this->_grad += exponent * std::pow(this->_data, exponent - 1) * out._grad;
-  };
-  return out;
+inline std::shared_ptr<Value> operator/(const std::shared_ptr<Value> &lhs,
+                                        const std::shared_ptr<Value> &rhs) {
+  return (*lhs) / rhs;
 }
 
-Value Value::relu() const {
-  Value out(_data < 0 ? 0 : _data, {const_cast<Value *>(this)}, "ReLU");
-  out._backward = [&out, this]() {
-    this->_grad += (out._data > 0) * out._grad;
-  };
-  return out;
+inline std::shared_ptr<Value> pow(const std::shared_ptr<Value> &lhs,
+                                  const std::shared_ptr<Value> &rhs) {
+  return lhs->pow(rhs);
 }
 
-void Value::backward() {
-  std::vector<Value *> topo;
-  std::unordered_set<Value *> visited;
-  build_topo(topo, visited);
-
-  _grad = 1.0;
-  for (auto it = topo.rbegin(); it != topo.rend(); ++it) {
-    (*it)->_backward();
-  }
-}
-
-void Value::build_topo(std::vector<Value *> &topo,
-                       std::unordered_set<Value *> &visited) const {
-  if (visited.find(const_cast<Value *>(this)) == visited.end()) {
-    visited.insert(const_cast<Value *>(this));
-    for (const auto &child : _prev) {
-      child->build_topo(topo, visited);
-    }
-    topo.push_back(const_cast<Value *>(this));
-  }
+inline std::shared_ptr<Value> relu(const std::shared_ptr<Value> &v) {
+  return v->relu();
 }
 
 } // namespace rezvangrad
 
-#endif // REZVANGRAD_ENGINE_HPP
+#endif
